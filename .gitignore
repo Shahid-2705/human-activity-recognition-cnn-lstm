@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# UCI HAR Raw Data (auto-downloaded via data/download_dataset.py)
+data/UCI HAR Dataset/
+data/UCI_HAR_Dataset.zip
+data/UCI HAR Dataset.names
+data/__MACOSX/
+*.zip
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Large final checkpoints if needed (keep best_cnn_lstm.pt)
+saved_models/final_cnn_lstm.pt
