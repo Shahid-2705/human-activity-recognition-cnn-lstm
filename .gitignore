@@ -44,3 +44,7 @@ saved_models/final_cnn_lstm.pt
 # Local virtual environment and secrets
 .venv/
 .env
+
+# Node UI
+web/node_modules/
+web/public/models/*.task

@@ -1,0 +1,18 @@
+{
+  "name": "har-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node UI for Human Activity Recognition: in-browser pose + face activity detection and a CNN-LSTM sensor API",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "postinstall": "node scripts/download-models.js",
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.2.2",
+    "express": "^5.1.0"
+  }
+}
