@@ -18,6 +18,17 @@ from utils.config import (
 )
 
 
+# Gravity vectors (g) measured from the UCI HAR training data (waist-mounted phone).
+# The vertical body axis is X: upright puts ~+1g on X, laying rotates it onto Y/Z.
+UPRIGHT_GRAVITY = (0.99, -0.27, 0.14)
+LAYING_GRAVITY = (-0.18, 0.74, 0.66)
+
+
+def _rest_vector(gravity) -> np.ndarray:
+    """Resting 9-channel reading: zero body motion + gravity on total_acc."""
+    return np.array([0, 0, 0, 0, 0, 0, *gravity], dtype=np.float32)
+
+
 class CameraMotionTracker:
     """
     Real-time vision-to-inertial kinematics tracker.
@@ -35,8 +46,7 @@ class CameraMotionTracker:
         
         # Pre-fill buffer with initial resting state (standing baseline)
         for _ in range(buffer_size):
-            # Baseline: total_acc_y ~ -0.98g (gravity down), others ~ 0
-            self.buffer.append(np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.98, 0.0], dtype=np.float32))
+            self.buffer.append(_rest_vector(UPRIGHT_GRAVITY))
 
         # Optical flow and motion state
         self.prev_gray = None
@@ -50,6 +60,14 @@ class CameraMotionTracker:
             history=120, varThreshold=25, detectShadows=False
         )
 
+        # Posture state with hysteresis: a person is only considered "laying"
+        # after a wide, horizontal, frame-spanning silhouette persists for
+        # ~1 second, and is only released after it has clearly disappeared.
+        self.lay_counter = 0
+        self.last_lay_candidate = False
+        self.lay_on_frames = max(int(self.fps * 1.0), 10)
+        self.is_laying_state = False
+
     def reset(self):
         """Reset internal buffers and history."""
         self.prev_gray = None
@@ -57,9 +75,12 @@ class CameraMotionTracker:
         self.prev_vy = 0.0
         self.prev_angle = 90.0
         self.prev_scale = 1.0
+        self.lay_counter = 0
+        self.last_lay_candidate = False
+        self.is_laying_state = False
         self.buffer.clear()
         for _ in range(self.buffer_size):
-            self.buffer.append(np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.98, 0.0], dtype=np.float32))
+            self.buffer.append(_rest_vector(UPRIGHT_GRAVITY))
 
     def process_frame(
         self,
@@ -85,7 +106,8 @@ class CameraMotionTracker:
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
         # Silhouette & Body Orientation via MOG2
-        fg_mask = self.bg_subtractor.apply(gray)
+        # Low learning rate: a person who stops moving stays in the foreground longer
+        fg_mask = self.bg_subtractor.apply(gray, learningRate=0.005)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
 
@@ -97,10 +119,15 @@ class CameraMotionTracker:
         body_angle = self.prev_angle
         scale = self.prev_scale
 
+        # Ignore small blobs (hands, shadows, noise): the subject must cover at
+        # least 4% of the processed frame to be used for posture estimation.
+        min_body_area = 0.04 * proc_w * proc_h
+        silhouette_wide = False
+
         if contours:
             largest = max(contours, key=cv2.contourArea)
             contour_area = cv2.contourArea(largest)
-            if contour_area > 500:
+            if contour_area > min_body_area:
                 largest_contour = largest
                 bbox = cv2.boundingRect(largest)
                 # Compute orientation from moments
@@ -114,6 +141,8 @@ class CameraMotionTracker:
                 # Aspect ratio (height / width): distinguishes standing vs sitting vs laying
                 bw, bh = bbox[2], bbox[3]
                 scale = float(bh) / max(float(bw), 1.0)
+                # Laying requires a silhouette that spans most of the frame width
+                silhouette_wide = bw > 0.6 * proc_w
 
         # Optical Flow for Velocity & Acceleration
         vx, vy = 0.0, 0.0
@@ -128,7 +157,7 @@ class CameraMotionTracker:
             )
 
             # Mask flow to motion region
-            if largest_contour is not None and contour_area > 500:
+            if largest_contour is not None:
                 mask_bool = fg_mask > 0
                 if np.any(mask_bool):
                     flow_x = flow[..., 0][mask_bool]
@@ -160,8 +189,9 @@ class CameraMotionTracker:
         # Compute Accelerations (derivative of velocity scaled to g's)
         # Normalizing factor maps pixel motion to standard human g acceleration ranges
         scale_factor = 0.04
-        acc_x = (vx - self.prev_vx) * scale_factor
-        acc_y = (vy - self.prev_vy) * scale_factor
+        # Sensor X is the vertical body axis, so vertical image motion drives it
+        acc_x = (vy - self.prev_vy) * scale_factor
+        acc_y = (vx - self.prev_vx) * scale_factor
         acc_z = (scale - self.prev_scale) * 0.08  # Depth/approach velocity derivative
 
         # Gyroscope: angular velocity from body angle rotation rate
@@ -172,16 +202,30 @@ class CameraMotionTracker:
 
         # Gravitational vector based on posture orientation
         # When laying down: gravity shifts into X or Z plane
-        # When upright: gravity points vertically down (-0.98g)
-        is_laying = (abs(body_angle) < 30.0 or abs(body_angle) > 150.0) and (scale < 0.9)
-        if is_laying:
-            grav_x = -0.98 * np.sign(acc_x if acc_x != 0 else 1.0)
-            grav_y = 0.05
-            grav_z = 0.1
+        # When upright: gravity lies on the vertical X axis (+0.99g)
+        laying_candidate = (
+            largest_contour is not None
+            and silhouette_wide
+            and (abs(body_angle) < 30.0 or abs(body_angle) > 150.0)
+            and scale < 0.7
+        )
+        if largest_contour is not None:
+            self.last_lay_candidate = laying_candidate
+        # With no body-sized contour (person motionless and absorbed into the
+        # background) the last posture evidence keeps driving the counter, so a
+        # still person stays in their posture and a stood-up person is released.
+        if self.last_lay_candidate:
+            self.lay_counter = min(self.lay_counter + 1, self.lay_on_frames * 2)
         else:
-            grav_x = 0.0
-            grav_y = -0.98
-            grav_z = 0.0
+            self.lay_counter = max(self.lay_counter - 2, 0)
+        if not self.is_laying_state and self.lay_counter >= self.lay_on_frames:
+            self.is_laying_state = True
+        elif self.is_laying_state and self.lay_counter == 0:
+            self.is_laying_state = False
+        is_laying = self.is_laying_state
+
+        # Fixed gravity direction per posture (no per-frame flipping from noise)
+        grav_x, grav_y, grav_z = LAYING_GRAVITY if is_laying else UPRIGHT_GRAVITY
 
         # Total acceleration = dynamic body acceleration + gravity
         total_acc_x = acc_x + grav_x

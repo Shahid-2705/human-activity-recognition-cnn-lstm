@@ -40,3 +40,7 @@ Thumbs.db
 
 # Large final checkpoints if needed (keep best_cnn_lstm.pt)
 saved_models/final_cnn_lstm.pt
+
+# Local virtual environment and secrets
+.venv/
+.env

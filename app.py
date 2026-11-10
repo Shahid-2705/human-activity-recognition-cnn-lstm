@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import time
+from collections import deque
 import numpy as np
 import pandas as pd
 import torch
@@ -639,8 +640,12 @@ elif page == "📷 Live Camera Test (Webcam / DroidCam)":
             st.markdown("#### Display Options")
             show_flow = st.checkbox("Overlay Motion Optical Flow Vectors", value=True)
             show_telemetry = st.checkbox("Show Real-time Synthesized Telemetry Chart", value=True)
-            max_stream_frames = st.slider("Stream Duration Limit (Frames)", min_value=30, max_value=600, value=200, step=30,
-                                          help="Automatically pauses after processing this many frames to conserve resources.")
+            capture_seconds = st.slider("Capture Duration (seconds)", min_value=10, max_value=600, value=60, step=10,
+                                        help="Length of each capture segment.")
+            auto_restart = st.checkbox("Continuous mode (auto-restart every segment until Stop)", value=True,
+                                       help="When a segment finishes, a new one starts immediately on the same open camera. Press Stop to end.")
+            smooth_window = st.slider("Prediction smoothing (windows)", min_value=1, max_value=20, value=8,
+                                      help="Averages the last N predictions to stop the label flickering.")
 
         with ctrl_col2:
             st.info(r"""
@@ -688,18 +693,48 @@ elif page == "📷 Live Camera Test (Webcam / DroidCam)":
             else:
                 tracker = CameraMotionTracker(buffer_size=128, fps=30.0)
                 frame_count = 0
+                segment = 1
+                segment_start = time.time()
                 prev_time = time.time()
+                failed_reads = 0
+                prob_history = deque(maxlen=smooth_window)
+                segment_done = False
 
                 last_pred_name = "Standing"
                 last_conf = 95.0
                 last_probs = np.zeros(6)
 
                 try:
-                    while st.session_state.get("camera_active", False) and frame_count < max_stream_frames:
+                    while st.session_state.get("camera_active", False):
+                        elapsed = time.time() - segment_start
+                        if elapsed >= capture_seconds:
+                            if auto_restart:
+                                # Start a fresh segment on the same open camera
+                                segment += 1
+                                segment_start = time.time()
+                                elapsed = 0.0
+                                frame_count = 0
+                                tracker.reset()
+                                prob_history.clear()
+                            else:
+                                segment_done = True
+                                break
+
                         ret, frame = cap.read()
                         if not ret or frame is None:
-                            st.warning("Video stream ended or connection dropped.")
-                            break
+                            # Tolerate brief drops; reopen the source if it keeps failing
+                            failed_reads += 1
+                            if failed_reads >= 30:
+                                cap.release()
+                                time.sleep(1.0)
+                                cap = cv2.VideoCapture(video_source)
+                                if not cap.isOpened():
+                                    st.warning("Video stream ended or connection dropped.")
+                                    break
+                                failed_reads = 0
+                            time.sleep(0.03)
+                            continue
+                        failed_reads = 0
 
                         frame_count += 1
                         curr_time = time.time()
@@ -720,7 +755,8 @@ elif page == "📷 Live Camera Test (Webcam / DroidCam)":
                             t_inf_0 = time.perf_counter()
                             with torch.no_grad():
                                 proba_tensor = model.predict_proba(tensor_in)
-                                last_probs = proba_tensor.cpu().numpy().squeeze()
+                                prob_history.append(proba_tensor.cpu().numpy().squeeze())
+                                last_probs = np.mean(prob_history, axis=0)
                                 pred_idx = int(np.argmax(last_probs))
                                 last_conf = float(last_probs[pred_idx]) * 100
                                 last_pred_name = ACTIVITY_LABEL_MAP.get(pred_idx, "Unknown")
@@ -745,7 +781,8 @@ elif page == "📷 Live Camera Test (Webcam / DroidCam)":
                                 <div style="margin-top: 12px; font-size: 0.8rem; color: #8b949e; display: flex; justify-content: space-around;">
                                     <span>Stream FPS: <b>{fps:.1f}</b></span>
                                     <span>Latency: <b>{inf_lat:.2f} ms</b></span>
-                                    <span>Frames: <b>{frame_count}/{max_stream_frames}</b></span>
+                                    <span>Time: <b>{int(elapsed)}s/{capture_seconds}s</b></span>
+                                    <span>Segment: <b>{segment}</b></span>
                                 </div>
                             </div>
                         """, unsafe_allow_html=True)
@@ -758,8 +795,8 @@ elif page == "📷 Live Camera Test (Webcam / DroidCam)":
                     cap.release()
                     st.session_state["camera_active"] = False
 
-                if frame_count >= max_stream_frames:
-                    st.success(f"Stream reached frame limit ({max_stream_frames} frames). Click '▶️ Start Live Camera' to resume.")
+                if segment_done:
+                    st.success(f"Capture finished ({capture_seconds}s). Click '▶️ Start Live Camera' to capture again.")
 
     # --------------------------------------------------------------------------
     # SUB-MODE 2: BROWSER CAMERA SNAPSHOT (st.camera_input)
