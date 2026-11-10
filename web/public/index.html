@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HAR Live</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>HAR <span>Live</span></h1>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="live" role="tab">Live camera</button>
+      <button class="tab" data-tab="sensor" role="tab">Sensor model</button>
+    </nav>
+    <span id="status" class="pill">Loading models…</span>
+  </header>
+
+  <main>
+    <!-- LIVE -->
+    <section id="tab-live" class="tabpane">
+      <div class="live-grid">
+        <div class="stage">
+          <canvas id="view" width="960" height="540"></canvas>
+          <video id="cam" playsinline muted hidden></video>
+          <img id="phoneImg" alt="" hidden>
+          <canvas id="frameCanvas" hidden></canvas>
+          <div id="overlay" class="overlay"><p>Press <b>Start</b> to open the camera</p></div>
+        </div>
+
+        <aside class="panel">
+          <div class="result">
+            <div class="label-small">Activity</div>
+            <div id="activity" class="activity">—</div>
+            <div id="hint" class="hint"></div>
+            <div class="chips">
+              <div class="chip"><span>Gesture</span><b id="gesture">—</b></div>
+              <div class="chip"><span>Expression <i title="Estimated from facial landmarks; not a reliable emotion reading">est.</i></span><b id="expression">—</b></div>
+            </div>
+          </div>
+
+          <div class="calib">
+            <div><b>Sitting vs standing</b><span id="calibState">Not calibrated</span></div>
+            <div class="calib-btns"><button id="calibBtn" class="primary" type="button">Calibrate (25 s)</button><button id="calibClear" class="ghost" type="button" hidden>Reset</button></div>
+          </div>
+          <div id="calibMsg" class="wizard" hidden></div>
+
+          <div class="controls">
+            <div class="seg-toggle" role="group" aria-label="Camera type">
+              <button id="srcWebcam" class="on" type="button">Webcam</button>
+              <button id="srcPhone" type="button">Phone camera</button>
+            </div>
+          </div>
+          <div class="controls">
+            <select id="source" aria-label="Webcam"></select>
+            <input id="phoneUrl" type="text" inputmode="url" placeholder="http://192.168.1.100:4747/video" aria-label="Phone camera address" hidden>
+            <button id="startBtn" class="primary">Start</button>
+            <button id="stopBtn" disabled>Stop</button>
+          </div>
+          <p id="phoneHelp" class="note" hidden>
+            Install <b>DroidCam</b> or <b>IP Webcam</b> on your phone, join the <b>same Wi-Fi</b>, and paste the video address it shows.
+            Using the DroidCam / Iriun / Camo desktop client instead? Choose <b>Webcam</b> &mdash; the phone shows up in that list.
+          </p>
+          <div class="controls">
+            <label>Segment
+              <select id="segLen">
+                <option value="30">30 s</option>
+                <option value="60" selected>1 min</option>
+                <option value="120">2 min</option>
+                <option value="300">5 min</option>
+              </select>
+            </label>
+            <span id="timer" class="timer">0:00 / 1:00 · #1</span>
+            <label class="file">Video file<input id="file" type="file" accept="video/*" hidden></label>
+          </div>
+
+          <div class="segment">
+            <div class="label-small">Time per activity · this segment</div>
+            <div id="bars" class="bars"><div class="empty">Waiting for data</div></div>
+            <div id="last" class="last"></div>
+          </div>
+
+          <details class="train">
+            <summary>Train on my own activities</summary>
+            <p class="note">Predictions are far better when trained on <b>your</b> camera, room and distance. Tick the activities, then follow the prompts. Keep your body in view and move a little during each recording.</p>
+            <div id="presets" class="presets"></div>
+            <div class="controls">
+              <label>Per activity
+                <select id="trainSecs"><option value="10">10 s</option><option value="15" selected>15 s</option><option value="20">20 s</option></select>
+              </label>
+              <button id="wizardBtn" class="primary">Start guided training</button>
+            </div>
+            <div id="wizardMsg" class="wizard" hidden></div>
+            <div id="report" class="report"></div>
+            <div id="trainCounts" class="counts"></div>
+            <div class="controls">
+              <label class="check"><input id="useKnn" type="checkbox"> Use my trained model</label>
+              <button id="cvBtn" class="ghost">Check accuracy</button>
+              <button id="clearBtn" class="ghost">Clear all</button>
+            </div>
+            <details class="adv">
+              <summary>Add a custom activity</summary>
+              <div class="controls">
+                <input id="trainLabel" list="labels" placeholder="Activity name" maxlength="30">
+                <datalist id="labels"><option value="Yawning"><option value="Typing"><option value="Reading"><option value="Stretching"></datalist>
+                <button id="recBtn">Record 10 s</button>
+              </div>
+            </details>
+            <div id="trainMsg" class="note"></div>
+          </details>
+        </aside>
+      </div>
+
+      <div class="cards">
+        <section class="card">
+          <h2>Session</h2>
+          <div class="stats">
+            <div class="stat"><span>Running</span><b id="stRun">0:00</b></div>
+            <div class="stat"><span>Frame rate</span><b id="stFps">&mdash;</b></div>
+            <div class="stat"><span>Camera</span><b id="stSrc">&mdash;</b></div>
+            <div class="stat"><span>Models</span><b id="stModels">&mdash;</b></div>
+            <div class="stat"><span>Longest streak</span><b id="stStreak">&mdash;</b></div>
+            <div class="stat"><span>Activity changes</span><b id="stChanges">0</b></div>
+          </div>
+          <div class="label-small hist-title">Finished segments</div>
+          <ol id="history" class="history"><li class="empty">None yet</li></ol>
+        </section>
+
+        <section class="card">
+          <h2>Timeline <small>last 5 min</small></h2>
+          <canvas id="timeline" width="640" height="56" aria-label="Activity timeline"></canvas>
+          <div id="legend" class="legend"><span class="empty">Starts when the camera runs</span></div>
+        </section>
+
+        <section class="card">
+          <h2>What it can detect</h2>
+          <div class="kinds">
+            <div><span class="label-small">Activity</span><p>Standing &middot; Sitting &middot; Laying &middot; Walking &middot; Running &middot; Jumping &middot; Bending</p></div>
+            <div><span class="label-small">Gestures</span><p>Waving &middot; Clapping &middot; Hands up &middot; Phone call &middot; Eating / drinking &middot; Hands together &middot; Hand at face &middot; Thumbs up &middot; Peace sign &middot; Pointing up &middot; Fist &middot; Open palm</p></div>
+            <div><span class="label-small">Expression (estimate)</span><p>Smiling &middot; Crying-like &middot; Neutral</p></div>
+          </div>
+          <ul class="tips">
+            <li>Press <b>Calibrate</b> once (25&nbsp;s) so it learns how you look sitting and standing in front of this camera.</li>
+            <li>Show your hands within about 1.5&nbsp;m for finger gestures (thumbs up, peace sign).</li>
+            <li>Face the camera, with good light, for expressions.</li>
+            <li>Use <b>Train on my own activities</b> to tune it to your room.</li>
+          </ul>
+        </section>
+      </div>
+    </section>
+
+    <!-- SENSOR -->
+    <section id="tab-sensor" class="tabpane" hidden>
+      <div class="sensor">
+        <p class="note">CNN-LSTM trained on smartphone accelerometer + gyroscope windows (UCI HAR). Pick a recorded sample and run it through the model.</p>
+        <div class="controls">
+          <select id="sample"></select>
+          <button id="predictBtn" class="primary">Predict</button>
+          <span id="acc" class="pill ghost-pill"></span>
+        </div>
+        <div id="sensorOut" class="sensor-out"></div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

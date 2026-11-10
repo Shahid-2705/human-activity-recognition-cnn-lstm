@@ -3,7 +3,7 @@
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg)](https://pytorch.org/)
 [![CUDA](https://img.shields.io/badge/CUDA-NVIDIA%20GPU-76B900.svg)](https://developer.nvidia.com/cuda-zone)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.25%2B-FF4B4B.svg)](https://streamlit.io/)
+[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 An end-to-end deep learning application for **Human Activity Recognition (HAR)** using triaxial accelerometer and gyroscope time-series signals from smartphones. The architecture combines **1D Convolutional Neural Networks (1D-CNN)** for invariant local motion extraction with **Long Short-Term Memory (LSTM)** recurrent networks for temporal sequence learning.
@@ -123,7 +123,14 @@ Evaluated on the **official independent UCI HAR test split (2,947 samples)**:
 ```
 human_activity_recognition/
 │
-├── app.py                     # Streamlit multi-page interactive web dashboard
+├── main.py                    # One command to run everything: python main.py
+├── api.py                     # FastAPI wrapper around the CNN-LSTM sensor model
+├── web/                       # Node (Express) UI
+│   ├── server.js              #   serves the UI, relays phone-camera streams, proxies /api
+│   ├── lib/phone-url.js       #   only local-network phone-camera addresses are accepted
+│   ├── public/                #   index.html, style.css and js/ (app, pose-classifier, knn)
+│   ├── scripts/download-models.js  # fetches the MediaPipe pose / face / hand models
+│   └── test/                  #   44 unit tests (classifier, hand actions, calibration, URL rules)
 ├── requirements.txt           # Project dependencies
 ├── README.md                  # Comprehensive documentation and benchmarks
 │
@@ -207,37 +214,67 @@ python training/train.py
 python evaluation/evaluate.py
 ```
 
-### Step 6: Launch the Streamlit Dashboard
+### Step 6: Run the app (one command)
 ```bash
-streamlit run app.py
+python main.py
 ```
-Open your browser at `http://localhost:8501`.
+It runs, in order: `npm install` (first run only), the Node UI on **http://localhost:3000**, then the Python sensor API on port 8000. Both print into the same terminal (`[node]` / `[python]`) and `Ctrl+C` stops both. Your browser opens when it is ready; add `--no-browser` to skip that.
+
+Requirements: Python 3.11+ and Node 18+. The first `npm install` also downloads the MediaPipe pose, face and hand-gesture models (about 21 MB) into `web/public/models/`.
+
+Options (environment variables): `PORT` (UI, default 3000), `API_PORT` (Python API, default 8000), `HOST` (default `127.0.0.1`, set `0.0.0.0` to open the dashboard to your network).
+
+Manual alternative: `cd web && npm install && npm start` (this also starts the Python API; set `START_API=0` to run the UI alone).
 
 ---
 
-## 7. Streamlit Dashboard Features
+## 7. Web UI
 
-The dashboard provides a modern dark-themed user interface:
-- **📊 Overview**: Executive summary, dataset metrics, architecture breakdown, and activity taxonomy.
-- **⚡ Activity Prediction**: Test preloaded benchmark samples or upload custom CSV sensor windows (128 samples $\times$ 9 channels) to get real-time activity predictions, confidence percentages, runner-up candidates, and latency stats.
-- **📷 Live Camera Test (Webcam / DroidCam)**: Real-time computer vision motion kinematics engine translating live webcam or DroidCam smartphone streams into continuous 9-channel inertial sequences for live 1D CNN-LSTM classification with on-frame cybernetic HUD overlays.
-- **📈 Model Performance**: Interactive Plotly confusion matrix, per-class Precision/Recall/F1 bar chart, and training loss/accuracy trajectories.
-- **🌊 Sensor Visualization**: Interactive multi-channel accelerometer ($g$) and gyroscope ($\text{rad/s}$) waveforms with resultant acceleration magnitude analysis.
-- **ℹ️ About & Architecture**: Complete technical background, academic rationale, and technology stack.
+A compact two-tab interface:
+- **Live camera**: pose and face models run **in your browser** (nothing is uploaded) and detect
+  - *Activity*: Standing, Sitting, Laying, Walking, Running, Jumping, Bending (or "Upper body only" when hips/knees are out of view)
+  - *Gesture*: Waving, Hands Up, Hand Raised, Clapping, Eating / Drinking, Phone Call, Hands together, Hand at face, plus finger signs (Thumbs up/down, Peace sign, Pointing up, I love you, Fist, Open palm)
+  - *Expression* (estimate): Crying-like, Smiling, Neutral
+  - Continuous capture in 30 s - 5 min segments with a per-segment time breakdown.
+  - Dashboard cards: session stats (running time, frame rate, camera, longest streak, activity changes), a 5-minute activity timeline, finished-segment history, and a guide to what can be detected.
+  - **Train on my own activities**: record 10 s clips of any activity (crying, yawning, typing, ...); a kNN model learns from them and is stored in your browser's localStorage.
+- **Sensor model**: runs the trained 1D CNN-LSTM on the recorded smartphone sensor samples and shows class probabilities.
+
+**Sitting vs standing**: leg geometry is unreliable on a webcam (legs are usually cropped), so press **Calibrate** once. It records 10 s sitting and 10 s standing and learns from body position only (size and height in the frame, which body parts are visible), ignoring your arms. On a recording of one user, a model trained on just those two clips called every unseen standing clip "Standing".
+
+**Clapping** is the weakest gesture: the hand model drops a hand whenever the palms meet, so a clap is only caught about 40-60% of the time. **Eating / drinking** and **phone call** use the hand model's fingertips and palms against the face.
+
+The live camera uses MediaPipe body, hand and face landmarks with measured rules. It is a practical estimate, not a clinical or safety-grade measurement. "Crying-like" only reflects facial expression, walking needs about 1-2 seconds of movement before it registers, and thresholds were tuned on recordings of one person in one room, so accuracy in your setup may differ. The **Train on my own activities** panel and **Calibrate** exist so you can tune it to your own camera.
+
+Run the tests with `cd web && npm test` (44 tests).
 
 ---
 
-## 8. Live Testing via Webcam / DroidCam
+## 8. Choosing a camera: webcam or phone
 
-### Setting Up DroidCam
-1. Install **DroidCam** on your Android or iOS device from Google Play Store or Apple App Store.
-2. Ensure your smartphone and PC are connected to the same Wi-Fi network.
-3. Open DroidCam on your phone. Note the **Wi-Fi IP** (e.g. `192.168.1.105`) and **Port** (`4747`).
-4. In the Streamlit app, navigate to **📷 Live Camera Test (Webcam / DroidCam)**.
-5. Select **DroidCam / Wi-Fi IP Camera URL** and enter `http://<phone_ip>:4747/video` (e.g. `http://192.168.1.105:4747/video`).
-6. Click **▶️ Start Live Camera**.
+Pick **Webcam** or **Phone camera** at the top of the Live tab. Your choice (and the phone address) is remembered.
 
-*(Alternatively, if using the DroidCam PC Client over USB or Wi-Fi, select **Local Webcam (Index 0 or 1)**).*
+### Phone camera over Wi-Fi (DroidCam / IP Webcam) - no PC software needed
+1. Put the phone and the PC on the **same Wi-Fi** (or connect the PC to the phone's hotspot).
+2. Open **DroidCam** on the phone and leave it open and awake. It shows a **WiFi IP** and a **port** (usually `4747`), e.g. `192.168.1.105`.
+3. Check it on the PC first: open `http://192.168.1.105:4747/video` (use your own IP) in a browser. If you see live video, the phone is reachable.
+4. Run `python main.py`, choose **Phone camera**, paste that address into the box and press **Start**.
+
+IP Webcam works the same way; use the video address it shows (for example `http://192.168.1.105:8080/video`).
+
+### Webcam (PC camera, USB camera, or phone via the DroidCam desktop client)
+Install the **DroidCam Client** on Windows, connect it to the phone (Wi-Fi or USB) and click Start. The phone then appears as **DroidCam Video** in the camera drop-down; stay on **Webcam** and pick it. Iriun and Camo work the same way. You can also load a video file.
+
+Use only one of the two DroidCam routes at a time: the free app generally accepts a single connection.
+
+### Troubleshooting
+- **"Could not reach the phone camera"**: check both devices are on the same network (guest Wi-Fi often isolates devices), the phone app is open, and no VPN or firewall is blocking it. Some versions use `/mjpegfeed` instead of `/video`.
+- **"Use an http(s) address on your local network"**: only `192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`, `*.local` and `localhost` addresses are accepted; internet addresses and addresses containing a username/password are refused on purpose.
+- **"Device in use"** (webcam): only one program can use a webcam at a time. Close other tabs or apps using it (Teams, Zoom, the Camera app, another copy of this page).
+- **Best results**: phone in landscape, about 2 m away so your head to knees are in view, then press **Calibrate** once.
+
+### Privacy
+Video is processed in your browser; nothing is uploaded. A phone stream is relayed by the local Node server only. Your recorded training samples and the sit/stand calibration are stored in your browser's localStorage. The dashboard listens on `127.0.0.1` only unless you set `HOST`.
 
 ---
 
